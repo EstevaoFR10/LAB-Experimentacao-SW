@@ -1,0 +1,14 @@
+# config.py.example
+# Renomeie este arquivo para config.py e configure seu token
+
+# Token do GitHub para acesso à API
+# Como obter:
+# 1. Acesse: https://github.com/settings/tokens
+# 2. Clique em "Generate new token (classic)"
+# 3. Selecione escopo: "public_repo" (para repositórios públicos)
+# 4. Copie o token gerado abaixo
+
+GITHUB_TOKEN = "seu_token_github_aqui"
+
+# Exemplo:
+# GITHUB_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
