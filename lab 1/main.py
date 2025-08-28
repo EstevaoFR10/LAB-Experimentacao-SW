@@ -50,8 +50,8 @@ def make_github_rest_request(url, params=None):
         raise
 
 
-def make_fast_request(url, headers, params=None):
-    """Requisição ultra rápida sem sleep"""
+def make_simple_request(url, headers, params=None):
+    """Requisição HTTP simples otimizada"""
     if params:
         query_string = urllib.parse.urlencode(params)
         url = f"{url}?{query_string}"
@@ -68,15 +68,15 @@ def make_fast_request(url, headers, params=None):
         return None, 0, {}
 
 
-def collect_1000_repositories():
-    """Coleta 1.000 repositórios usando paginação otimizada"""
+def collect_repositories():
+    """Coleta 1000 repositórios usando paginação otimizada"""
     all_repositories = []
     per_page = 100
     total_needed = 1000
     
     print(f"Coletando {total_needed} repositórios...")
     
-    total_pages = (total_needed + per_page - 1) // per_page
+    total_pages = (total_needed + per_page - 1) // per_page  # 10 páginas para 1000 repos
     
     for page in range(1, total_pages + 1):
         print(f"Página {page}/{total_pages}... (Total: {len(all_repositories)})")
@@ -110,95 +110,149 @@ def collect_1000_repositories():
     return all_repositories[:total_needed]
 
 
-def get_all_counts_batch(owner, repo_name):
-    """Faz todas as contagens de uma vez usando Search API"""
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "Lab01S02-Research"
+def get_all_counts_alternative(owner, repo_name, headers, repo_data=None):
+    """Usa APIs diretas em vez de Search API para evitar rate limits"""
+    results = {
+        'merged_prs': 0,
+        'closed_issues': 0,
+        'total_issues': 0
     }
     
-    search_url = "https://api.github.com/search/issues"
+    # 1. Contar PRs via API direta
+    prs_url = f"https://api.github.com/repos/{owner}/{repo_name}/pulls"
+    prs_params = {"state": "closed", "per_page": 100}
+    prs_data, prs_status, prs_headers = make_simple_request(prs_url, headers, prs_params)
     
-    # Fazer 3 requisições em sequência rápida
-    queries = [
-        (f"repo:{owner}/{repo_name} type:pr is:merged", 'merged_prs'),
-        (f"repo:{owner}/{repo_name} type:issue is:closed", 'closed_issues'),
-        (f"repo:{owner}/{repo_name} type:issue", 'total_issues')
-    ]
+    if prs_status == 200 and prs_data:
+        # Contar PRs merged na primeira página
+        merged_count = sum(1 for pr in prs_data if pr.get('merged_at'))
+        results['merged_prs'] = merged_count
+        
+        # Se há paginação, estimar total
+        link_header = prs_headers.get('Link', '')
+        if 'rel="last"' in link_header:
+            match = re.search(r'page=(\d+)[^>]*>;\s*rel="last"', link_header)
+            if match:
+                last_page = int(match.group(1))
+                # Estimativa: assumir mesmo ratio de merged PRs nas outras páginas
+                total_closed_prs = last_page * 100
+                merge_ratio = merged_count / len(prs_data) if prs_data else 0
+                results['merged_prs'] = int(total_closed_prs * merge_ratio)
+    elif prs_status == 500:
+        print(f"[LOG] {owner}/{repo_name} - Servidor GitHub sobrecarregado (repositório muito grande)")
+        # Deixar como 0 - não fazer estimativas
+        results['merged_prs'] = 0
+    else:
+        print(f"[LOG] {owner}/{repo_name} - Falha ao buscar PRs (status: {prs_status})")
     
-    results = {}
+    # 2. Contar issues via API direta
+    issues_url = f"https://api.github.com/repos/{owner}/{repo_name}/issues"
+    issues_params = {"state": "closed", "per_page": 100}
+    issues_data, issues_status, issues_headers = make_simple_request(issues_url, headers, issues_params)
     
-    for query, key in queries:
-        params = {"q": query, "per_page": 1}
-        data, status, _ = make_fast_request(search_url, headers, params)
-        results[key] = data.get('total_count', 0) if status == 200 and data else 0
+    if issues_status == 200 and issues_data:
+        # Filtrar apenas issues (não PRs)
+        actual_issues = [issue for issue in issues_data if not issue.get('pull_request')]
+        results['closed_issues'] = len(actual_issues)
+        
+        # Estimar total se há paginação
+        link_header = issues_headers.get('Link', '')
+        if 'rel="last"' in link_header:
+            match = re.search(r'page=(\d+)[^>]*>;\s*rel="last"', link_header)
+            if match:
+                last_page = int(match.group(1))
+                results['closed_issues'] = last_page * len(actual_issues)
+    elif issues_status == 500:
+        print(f"[LOG] {owner}/{repo_name} - Servidor GitHub sobrecarregado para contar issues")
+        # Deixar como 0 - não fazer estimativas
+        results['closed_issues'] = 0
+    else:
+        print(f"[LOG] {owner}/{repo_name} - Falha ao buscar issues (status: {issues_status})")
     
     return results
 
 
-def get_releases_fast(owner, repo_name):
-    """Conta releases de forma super otimizada"""
+def get_releases_fast(owner, repo_name, headers):
+    """Conta releases rapidamente usando header de paginação"""
+    url = f"https://api.github.com/repos/{owner}/{repo_name}/releases"
+    params = {"per_page": 100}
+    
+    data, status, response_headers = make_simple_request(url, headers, params)
+    
+    if status != 200:
+        return 0
+    
+    # Verificar header Link para paginação
+    link_header = response_headers.get('Link', '')
+    if 'rel="last"' in link_header:
+        match = re.search(r'page=(\d+)[^>]*>;\s*rel="last"', link_header)
+        if match:
+            last_page = int(match.group(1))
+            return last_page * 100  # Estimativa baseada na última página
+    
+    # Se não há paginação, contar releases na primeira página
+    return len(data) if data else 0
+
+
+def get_repository_details(owner, repo_name):
+    """Coleta dados completos do repositório de forma otimizada"""
+    # URL base para o repositório
+    repo_url = f"https://api.github.com/repos/{owner}/{repo_name}"
+    
+    # Dados básicos do repositório
+    repo_data = make_github_rest_request(repo_url)
+    
+    if not repo_data:
+        print(f"[LOG] {owner}/{repo_name} - Falha ao obter dados básicos do repositório.")
+        return None
+    
+    # Headers para requisições auxiliares
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
         "User-Agent": "Lab01S02-Research"
     }
     
-    url = f"https://api.github.com/repos/{owner}/{repo_name}/releases"
-    params = {"per_page": 100}
+    # Usar funções otimizadas para contagens
+    search_counts = get_all_counts_alternative(owner, repo_name, headers, repo_data)
+    total_releases = get_releases_fast(owner, repo_name, headers)
     
-    data, status, response_headers = make_fast_request(url, headers, params)
-    
-    if status != 200:
-        return 0
-    
-    # Verificar paginação no header Link
-    link_header = response_headers.get('Link', '')
-    if 'rel="last"' in link_header:
-        match = re.search(r'page=(\d+)[^>]*>;\s*rel="last"', link_header)
-        if match:
-            return int(match.group(1)) * 100
-    
-    return len(data) if data else 0
-
-
-def get_repository_details_ultra_fast(owner, repo_name):
-    """Versão ultra otimizada - coleta tudo com mínimas requisições"""
-    # 1. Dados básicos (obrigatório)
-    repo_url = f"https://api.github.com/repos/{owner}/{repo_name}"
-    repo_data = make_github_rest_request(repo_url)
-    
-    # 2. Todas as contagens via Search API (3 requisições rápidas)
-    counts = get_all_counts_batch(owner, repo_name)
-    
-    # 3. Releases (1 requisição)
-    total_releases = get_releases_fast(owner, repo_name)
+    # Calcular total de issues usando dados do repositório
+    open_issues = repo_data.get('open_issues_count', 0)
+    closed_issues = search_counts.get('closed_issues', 0)
+    total_issues = open_issues + closed_issues
     
     return {
         'repo_data': repo_data,
-        'merged_prs': counts.get('merged_prs', 0),
+        'merged_prs': search_counts.get('merged_prs', 0),
         'total_releases': total_releases,
-        'closed_issues': counts.get('closed_issues', 0),
-        'total_issues_from_search': counts.get('total_issues', 0)
+        'closed_issues': closed_issues,
+        'total_issues_from_search': total_issues
     }
 
 
 def process_repository_data(repo_info):
-    """Processa dados do repositório"""
+    """Processa dados do repositório e calcula métricas"""
     repo_data = repo_info['repo_data']
     now_utc = datetime.now(timezone.utc)
     
-    # Calcular métricas de tempo
+    # Calcular idade do repositório
     created_at = datetime.fromisoformat(repo_data['created_at'].replace('Z', '+00:00'))
     age_days = (now_utc - created_at).days
     
-    updated_at = datetime.fromisoformat(repo_data['updated_at'].replace('Z', '+00:00'))
-    days_since_update = max(0, (now_utc - updated_at).days)
+    # Dias desde última atualização - usar pushed_at (último commit) em vez de updated_at
+    # updated_at pode ser atualizado por outras ações (issues, wiki, etc.)
+    last_push = repo_data.get('pushed_at', repo_data['updated_at'])
+    if last_push:
+        pushed_at = datetime.fromisoformat(last_push.replace('Z', '+00:00'))
+        days_since_update = (now_utc - pushed_at).days
+    else:
+        days_since_update = 0
     
+    # Linguagem primária
     primary_language = repo_data['language'] or 'Unknown'
     
-    # Usar dados do Search API
+    # Usar dados calculados para issues
     total_issues = repo_info['total_issues_from_search']
     closed_issues = repo_info['closed_issues']
     closed_issues_ratio = closed_issues / total_issues if total_issues > 0 else 0
@@ -284,8 +338,8 @@ def print_statistics(repositories):
 
 def main():
     """Função principal ULTRA OTIMIZADA - Lab01S02"""
-    print("=== Lab01S02 - 1.000 Repositórios ULTRA OTIMIZADO ===")
-    print("Coleta rápida dos 1.000 repositórios mais populares...")
+    print("=== Lab01S02 - 1000 Repositórios ULTRA OTIMIZADO ===")
+    print("Coletando os 1000 repositórios mais populares...")
     
     start_time = time.time()
     processed_repos = []
@@ -293,7 +347,7 @@ def main():
     try:
         # Etapa 1: Coletar repositórios (10 requisições)
         print("\nEtapa 1: Coletando lista de repositórios...")
-        repositories = collect_1000_repositories()
+        repositories = collect_repositories()
         
         if not repositories:
             print("Nenhum repositório foi coletado.")
@@ -307,26 +361,26 @@ def main():
         
         for i, repo in enumerate(repositories, 1):
             try:
-                # Log menos verboso
-                if i % 10 == 0 or i <= 10:
-                    print(f"Processando {i}/{len(repositories)}: {repo['owner']['login']}/{repo['name']}")
+                # Log a cada 50 repositórios para não poluir muito
+                if i % 50 == 0 or i <= 10 or i > len(repositories) - 10:
+                    print(f"Processando #{i}/{len(repositories)}: {repo['owner']['login']}/{repo['name']}")
                 
-                # Processar com função ultra otimizada (5 requisições por repo)
-                repo_details = get_repository_details_ultra_fast(repo['owner']['login'], repo['name'])
-                processed_repo = process_repository_data(repo_details)
-                processed_repos.append(processed_repo)
+                # Buscar detalhes do repositório (otimizado)
+                repo_details = get_repository_details(repo['owner']['login'], repo['name'])
                 
-                # Backup menos frequente
-                if i % 200 == 0:
-                    elapsed = time.time() - start_time
-                    rate = i / elapsed * 60
-                    print(f"Progresso: {i}/{len(repositories)} ({rate:.1f} repos/min)")
+                if repo_details:
+                    # Processar dados
+                    processed_repo = process_repository_data(repo_details)
+                    processed_repos.append(processed_repo)
                     
-                    backup_csv = f'data/backup_{i}.csv'
-                    save_to_csv(processed_repos, backup_csv)
+                    if i % 50 == 0 or i <= 10 or i > len(repositories) - 10:
+                        print(f"  → PRs aceitas: {processed_repo['merged_prs']}, Issues fechadas: {processed_repo['closed_issues']}, Taxa: {processed_repo['closed_issues_ratio']:.2%}")
+                else:
+                    print(f"  → Dados do repositório não disponíveis.")
+                    continue
                 
             except Exception as e:
-                print(f"Erro no repo {i}: {e}")
+                print(f"Erro ao processar repositório #{i}: {e}")
                 continue
         
         # Etapa 3: Salvar resultados finais
