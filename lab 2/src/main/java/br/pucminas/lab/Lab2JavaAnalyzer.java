@@ -19,9 +19,6 @@ package br.pucminas.lab;
  * Lab02S02: CSV completo + hipóteses + Análise e relatório final (15pts)
  */
 
-import com.github.mauricioaniche.ck.CK;
-import com.github.mauricioaniche.ck.CKNumber;
-import com.github.mauricioaniche.ck.CKReport;
 import org.kohsuke.github.*;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
@@ -39,14 +36,13 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class Lab2JavaAnalyzer {
     
     private static final String DATA_DIR = "data";
     private static final String REPOS_DIR = "repos_cloned";
     private static final String CONFIG_FILE = "config.properties";
-    private static final int MAX_REPOS_LIMIT = 50; // Para testes, aumentar depois
+    private static final int MAX_REPOS_LIMIT = 100; // Aumentado para coleta completa
     
     private final GitHub github;
     private final ObjectMapper objectMapper;
@@ -238,15 +234,17 @@ public class Lab2JavaAnalyzer {
                 info.forks = repo.getForksCount();
                 info.size = repo.getSize();
                 info.language = repo.getLanguage();
-                info.createdAt = repo.getCreatedAt().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime();
-                info.updatedAt = repo.getUpdatedAt().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime();
+                LocalDateTime created = repo.getCreatedAt().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime();
+                LocalDateTime updated = repo.getUpdatedAt().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime();
+                info.createdAt = created.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+                info.updatedAt = updated.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
                 info.hasIssues = repo.hasIssues();
                 info.hasWiki = repo.hasWiki();
                 info.defaultBranch = repo.getDefaultBranch();
-                info.cloneUrl = repo.getCloneUrl();
+                info.cloneUrl = repo.getHttpTransportUrl();
                 
                 // Calcular idade em anos
-                info.ageInYears = ChronoUnit.YEARS.between(info.createdAt, LocalDateTime.now());
+                info.ageInYears = ChronoUnit.YEARS.between(created, LocalDateTime.now());
                 
                 // Contar releases
                 try {
@@ -363,22 +361,63 @@ public class Lab2JavaAnalyzer {
     
     private CKMetrics runCKAnalysis(Path repoPath) {
         try {
-            // Usar CK API
-            CK ck = new CK();
-            CKReport report = ck.calculate(repoPath.toString());
+            // Usar CK via comando externo (mais compatível)
+            Path ckJar = Paths.get("ck-0.7.1-SNAPSHOT-jar-with-dependencies.jar");
+            Path outputDir = Paths.get("ck_output");
+            Files.createDirectories(outputDir);
             
-            List<CKNumber> results = report.all();
+            // Executar CK
+            ProcessBuilder pb = new ProcessBuilder(
+                "java", "-jar", ckJar.toString(), 
+                repoPath.toString(), "true", "0", "false", outputDir.toString()
+            );
             
-            if (results.isEmpty()) {
+            Process process = pb.start();
+            int exitCode = process.waitFor();
+            
+            if (exitCode != 0) {
                 return null;
             }
             
-            // Calcular estatísticas
-            List<Double> cboValues = results.stream().mapToDouble(CKNumber::getCbo).boxed().collect(Collectors.toList());
-            List<Double> ditValues = results.stream().mapToDouble(CKNumber::getDit).boxed().collect(Collectors.toList());
-            List<Double> lcomValues = results.stream().mapToDouble(CKNumber::getLcom).boxed().collect(Collectors.toList());
+            // Ler resultados do CSV gerado
+            Path csvFile = outputDir.resolve("class.csv");
+            if (!Files.exists(csvFile)) {
+                return null;
+            }
             
-            long totalLoc = results.stream().mapToLong(CKNumber::getLoc).sum();
+            return parseCKResults(csvFile);
+            
+        } catch (Exception e) {
+            System.out.println("Erro na análise CK: " + e.getMessage());
+            return null;
+        }
+    }
+    
+    private CKMetrics parseCKResults(Path csvFile) {
+        try {
+            List<String> lines = Files.readAllLines(csvFile);
+            if (lines.size() <= 1) return null; // Apenas cabeçalho
+            
+            List<Double> cboValues = new ArrayList<>();
+            List<Double> ditValues = new ArrayList<>();
+            List<Double> lcomValues = new ArrayList<>();
+            long totalLoc = 0;
+            
+            for (int i = 1; i < lines.size(); i++) {
+                String[] parts = lines.get(i).split(",");
+                if (parts.length >= 10) {
+                    try {
+                        cboValues.add(Double.parseDouble(parts[7])); // CBO column
+                        ditValues.add(Double.parseDouble(parts[8])); // DIT column  
+                        lcomValues.add(Double.parseDouble(parts[9])); // LCOM column
+                        totalLoc += Long.parseLong(parts[3]); // LOC column
+                    } catch (NumberFormatException e) {
+                        // Skip invalid lines
+                    }
+                }
+            }
+            
+            if (cboValues.isEmpty()) return null;
             
             CKMetrics metrics = new CKMetrics();
             metrics.cboMean = cboValues.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
@@ -388,12 +427,11 @@ public class Lab2JavaAnalyzer {
             metrics.lcomMean = lcomValues.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
             metrics.lcomMedian = calculateMedian(lcomValues);
             metrics.loc = totalLoc;
-            metrics.classesCount = results.size();
+            metrics.classesCount = cboValues.size();
             
             return metrics;
             
         } catch (Exception e) {
-            System.out.println("Erro na análise CK: " + e.getMessage());
             return null;
         }
     }
@@ -423,8 +461,8 @@ public class Lab2JavaAnalyzer {
                 printer.printRecord(
                     repo.fullName, repo.name, repo.owner, repo.description,
                     repo.stars, repo.forks, repo.size, repo.language,
-                    repo.createdAt.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
-                    repo.updatedAt.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+                    repo.createdAt,
+                    repo.updatedAt,
                     repo.ageInYears, repo.releasesCount,
                     repo.hasIssues, repo.hasWiki, repo.defaultBranch, repo.cloneUrl
                 );
@@ -531,8 +569,8 @@ public class Lab2JavaAnalyzer {
         public int forks;
         public int size;
         public String language;
-        public LocalDateTime createdAt;
-        public LocalDateTime updatedAt;
+        public String createdAt;
+        public String updatedAt;
         public long ageInYears;
         public int releasesCount;
         public boolean hasIssues;
