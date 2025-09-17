@@ -1,27 +1,9 @@
 package br.pucminas.lab;
 
-/**
- * Lab 2: Um estudo das características de qualidade de sistemas Java
- * Laboratório de Experimentação de Software - PUC Minas
- * Professor: João Paulo Carneiro Aramuni
- * 
- * Análise de correlação entre métricas de processo e qualidade em repositórios Java
- * usando a ferramenta CK (Chidamber & Kemerer)
- * 
- * Questões de Pesquisa:
- * RQ01: Popularidade vs Qualidade (Stars vs CK metrics)
- * RQ02: Maturidade vs Qualidade (Idade vs CK metrics)  
- * RQ03: Atividade vs Qualidade (Releases vs CK metrics)
- * RQ04: Tamanho vs Qualidade (LOC vs CK metrics)
- * 
- * Sprints:
- * Lab02S01: Lista 1000 repos + Script + 1 repo teste (5pts)
- * Lab02S02: CSV completo + hipóteses + Análise e relatório final (15pts)
- */
-
 import org.kohsuke.github.*;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
+
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -36,13 +18,15 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class Lab2JavaAnalyzer {
     
     private static final String DATA_DIR = "data";
     private static final String REPOS_DIR = "repos_cloned";
     private static final String CONFIG_FILE = "config.properties";
-    private static final int MAX_REPOS_LIMIT = 100; // Aumentado para coleta completa
+    private static final int MAX_REPOS_LIMIT = 1000; // Limite reduzido para teste
     
     private final GitHub github;
     private final ObjectMapper objectMapper;
@@ -222,7 +206,7 @@ public class Lab2JavaAnalyzer {
         
         int count = 0;
         for (GHRepository repo : searchResult) {
-            if (count >= 1000) break;
+            if (count >= MAX_REPOS_LIMIT) break; // Usando MAX_REPOS_LIMIT para consistência
             
             try {
                 RepositoryInfo info = new RepositoryInfo();
@@ -361,34 +345,100 @@ public class Lab2JavaAnalyzer {
     
     private CKMetrics runCKAnalysis(Path repoPath) {
         try {
+            if (!Files.exists(repoPath)) {
+                System.out.println("Repositório não encontrado: " + repoPath);
+                return null;
+            }
+
             // Usar CK via comando externo (mais compatível)
             Path ckJar = Paths.get("ck-0.7.1-SNAPSHOT-jar-with-dependencies.jar");
-            Path outputDir = Paths.get("ck_output");
-            Files.createDirectories(outputDir);
+            if (!Files.exists(ckJar)) {
+                throw new FileNotFoundException("JAR do CK não encontrado: " + ckJar);
+            }
+
+            // Configurar diretório de saída e nome do arquivo esperado
+            Path baseOutputDir = Paths.get("ck_output");
+            Files.createDirectories(baseOutputDir);
+            String repoName = repoPath.getFileName().toString().replace("/", "_");
+            // O CK cria uma pasta com o nome do repositório
+            Path repoOutputDir = baseOutputDir.resolve(repoName);
+            Files.createDirectories(repoOutputDir);
+            Path expectedCsvFile = repoOutputDir.resolve("class.csv");
             
-            // Executar CK
+            System.out.println("\nIniciando análise do CK:");
+            System.out.println("  Repositório: " + repoPath.getFileName());
+            System.out.println("  Arquivo esperado: " + expectedCsvFile);
+            System.out.println("  JAR do CK: " + ckJar.toAbsolutePath());
+            
+            // Executar CK com mais memória e timeout
             ProcessBuilder pb = new ProcessBuilder(
-                "java", "-jar", ckJar.toString(), 
-                repoPath.toString(), "true", "0", "false", outputDir.toString()
+                "java",
+                "-Xmx4g",      // Aumentar memória para 4GB
+                "-jar", ckJar.toString(),
+                repoPath.toString(),
+                "true",        // apenas arquivos Java
+                "4",           // usar 4 threads
+                "false",       // não usar apenas último commit
+                repoOutputDir.toString()  // Usar o diretório específico do repositório
             );
             
+            pb.redirectErrorStream(true);
             Process process = pb.start();
-            int exitCode = process.waitFor();
             
+            // Ler output em tempo real com timeout
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                    if (line.contains("error") || line.contains("Exception")) {
+                        System.out.println("  ERRO: " + line);
+                    } else if (line.contains("Processing")) {
+                        System.out.print(".");  // progresso
+                    }
+                }
+            }
+            
+            // Esperar no máximo 5 minutos
+            boolean completed = process.waitFor(300, TimeUnit.SECONDS);
+            if (!completed) {
+                process.destroy();
+                System.out.println("\nTimeout na análise de: " + repoPath.getFileName());
+                return null;
+            }
+            
+            int exitCode = process.exitValue();
             if (exitCode != 0) {
+                System.out.println("\nFalha na análise de: " + repoPath.getFileName());
+                System.out.println("Output do CK:\n" + output);
                 return null;
             }
             
-            // Ler resultados do CSV gerado
-            Path csvFile = outputDir.resolve("class.csv");
-            if (!Files.exists(csvFile)) {
+            // Verificar arquivo gerado pelo CK (que adiciona o nome do repo no arquivo)
+            Path generatedClassFile = baseOutputDir.resolve(repoName + "class.csv");
+            Path generatedMethodFile = baseOutputDir.resolve(repoName + "method.csv");
+            
+            if (!Files.exists(generatedClassFile)) {
+                System.out.println("Arquivo não encontrado: " + generatedClassFile);
                 return null;
             }
             
-            return parseCKResults(csvFile);
+            // Mover os arquivos para a pasta específica do repositório
+            try {
+                Files.move(generatedClassFile, expectedCsvFile, StandardCopyOption.REPLACE_EXISTING);
+                if (Files.exists(generatedMethodFile)) {
+                    Files.move(generatedMethodFile, repoOutputDir.resolve("method.csv"), StandardCopyOption.REPLACE_EXISTING);
+                }
+            } catch (IOException e) {
+                System.out.println("Erro ao mover arquivos: " + e.getMessage());
+                return null;
+            }
+            
+            return parseCKResults(expectedCsvFile);
             
         } catch (Exception e) {
             System.out.println("Erro na análise CK: " + e.getMessage());
+            e.printStackTrace();
             return null;
         }
     }
@@ -396,28 +446,54 @@ public class Lab2JavaAnalyzer {
     private CKMetrics parseCKResults(Path csvFile) {
         try {
             List<String> lines = Files.readAllLines(csvFile);
-            if (lines.size() <= 1) return null; // Apenas cabeçalho
+            System.out.println("  Lendo arquivo CSV com " + lines.size() + " linhas");
+            
+            if (lines.size() <= 1) {
+                System.out.println("  AVISO: Arquivo CSV vazio ou só com cabeçalho");
+                return null;
+            }
             
             List<Double> cboValues = new ArrayList<>();
             List<Double> ditValues = new ArrayList<>();
             List<Double> lcomValues = new ArrayList<>();
             long totalLoc = 0;
+            int processedLines = 0;
+            int skippedLines = 0;
+            
+            // Mostrar cabeçalho para debug
+            System.out.println("  Cabeçalho: " + lines.get(0));
             
             for (int i = 1; i < lines.size(); i++) {
                 String[] parts = lines.get(i).split(",");
                 if (parts.length >= 10) {
                     try {
-                        cboValues.add(Double.parseDouble(parts[7])); // CBO column
-                        ditValues.add(Double.parseDouble(parts[8])); // DIT column  
-                        lcomValues.add(Double.parseDouble(parts[9])); // LCOM column
-                        totalLoc += Long.parseLong(parts[3]); // LOC column
+                        double cbo = Double.parseDouble(parts[7]); // CBO
+                        double dit = Double.parseDouble(parts[8]); // DIT
+                        double lcom = Double.parseDouble(parts[9]); // LCOM
+                        long loc = Long.parseLong(parts[3]); // LOC
+                        
+                        cboValues.add(cbo);
+                        ditValues.add(dit);
+                        lcomValues.add(lcom);
+                        totalLoc += loc;
+                        processedLines++;
+                        
                     } catch (NumberFormatException e) {
-                        // Skip invalid lines
+                        System.out.println("  AVISO: Linha " + i + " com formato inválido: " + e.getMessage());
+                        skippedLines++;
                     }
+                } else {
+                    System.out.println("  AVISO: Linha " + i + " com menos colunas que o esperado: " + parts.length);
+                    skippedLines++;
                 }
             }
             
-            if (cboValues.isEmpty()) return null;
+            System.out.printf("  Processamento: %d linhas ok, %d linhas puladas%n", processedLines, skippedLines);
+            
+            if (cboValues.isEmpty()) {
+                System.out.println("  ERRO: Nenhuma métrica válida encontrada no arquivo");
+                return null;
+            }
             
             CKMetrics metrics = new CKMetrics();
             metrics.cboMean = cboValues.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
@@ -448,6 +524,8 @@ public class Lab2JavaAnalyzer {
             return values.get(size/2);
         }
     }
+
+
     
     private void saveRepositoriesCSV(List<RepositoryInfo> repositories, Path csvFile) throws IOException {
         try (CSVPrinter printer = new CSVPrinter(Files.newBufferedWriter(csvFile), CSVFormat.DEFAULT)) {
@@ -471,6 +549,8 @@ public class Lab2JavaAnalyzer {
     }
     
     private void saveResultsCSV(List<RepositoryAnalysis> results, Path csvFile) throws IOException {
+        System.out.println("Salvando resultados em: " + csvFile.toAbsolutePath());
+        
         try (CSVPrinter printer = new CSVPrinter(Files.newBufferedWriter(csvFile), CSVFormat.DEFAULT)) {
             // Cabeçalho
             printer.printRecord("full_name", "stars", "age_years", "releases_count", "size",
@@ -479,6 +559,7 @@ public class Lab2JavaAnalyzer {
             
             // Dados
             for (RepositoryAnalysis analysis : results) {
+                System.out.println("Salvando métricas para: " + analysis.fullName);
                 printer.printRecord(
                     analysis.fullName, analysis.stars, analysis.ageInYears, 
                     analysis.releasesCount, analysis.size,
