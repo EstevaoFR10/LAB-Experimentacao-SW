@@ -35,10 +35,10 @@ Thumbs.db
 
 # Lab 2 Específico
 config.properties
-data/
 repos_cloned/
 logs/
 *.log
+ck_output
 
 # Backup files
 *.bak

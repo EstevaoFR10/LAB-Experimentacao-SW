@@ -26,7 +26,8 @@ public class Lab2JavaAnalyzer {
     private static final String DATA_DIR = "data";
     private static final String REPOS_DIR = "repos_cloned";
     private static final String CONFIG_FILE = "config.properties";
-    private static final int MAX_REPOS_LIMIT = 1000; // Limite reduzido para teste
+    private static final int MAX_REPOS_LIMIT = 1000; // Versão final - 1000 repositórios
+    private static final int START_FROM_REPO = 38; // Começar do repositório 38 (onde parou)
     
     private final GitHub github;
     private final ObjectMapper objectMapper;
@@ -98,11 +99,21 @@ public class Lab2JavaAnalyzer {
             Path csvFile = dataPath.resolve("repositorios_1000_java.csv");
             saveRepositoriesCSV(repositories, csvFile);
             
-            // Testar com 1 repositório
+            // Testar com repositórios até encontrar um que tenha código Java
             if (!repositories.isEmpty()) {
-                System.out.println("\nTestando análise CK com 1 repositório...");
-                RepositoryInfo testRepo = repositories.get(0);
-                testSingleRepository(testRepo);
+                System.out.println("\nTestando análise CK com repositórios até encontrar código Java...");
+                boolean testeSucesso = false;
+                for (RepositoryInfo testRepo : repositories) {
+                    System.out.println("Tentando: " + testRepo.fullName);
+                    if (testSingleRepository(testRepo)) {
+                        testeSucesso = true;
+                        break;
+                    }
+                }
+                
+                if (!testeSucesso) {
+                    System.out.println("AVISO: Nenhum dos repositórios testados contém código Java analisável.");
+                }
             }
             
             System.out.println("\nLAB02S01 CONCLUÍDO!");
@@ -135,19 +146,28 @@ public class Lab2JavaAnalyzer {
             );
             
             System.out.println("Processando " + repositories.size() + " repositórios...");
+            System.out.println("REINICIANDO A PARTIR DO REPOSITÓRIO #" + START_FROM_REPO);
             
             List<RepositoryAnalysis> results = new ArrayList<>();
             int processed = 0;
+            int repoIndex = 0;
             
             for (RepositoryInfo repo : repositories) {
+                repoIndex++;
+                
+                // Pular repositórios já processados
+                if (repoIndex < START_FROM_REPO) {
+                    continue;
+                }
+                
                 if (processed >= MAX_REPOS_LIMIT) {
                     System.out.println("AVISO: Limite de processamento atingido: " + processed + " repositórios");
                     break;
                 }
                 
                 try {
-                    System.out.printf("[%d/%d] Analisando: %s\n", processed + 1, 
-                        Math.min(repositories.size(), MAX_REPOS_LIMIT), repo.fullName);
+                    System.out.printf("[%d/%d] Analisando: %s (repo #%d)\n", processed + 1, 
+                        Math.min(repositories.size(), MAX_REPOS_LIMIT), repo.fullName, repoIndex);
                     
                     RepositoryAnalysis analysis = analyzeRepository(repo);
                     if (analysis != null) {
@@ -253,7 +273,7 @@ public class Lab2JavaAnalyzer {
         return repositories;
     }
     
-    private void testSingleRepository(RepositoryInfo repo) {
+    private boolean testSingleRepository(RepositoryInfo repo) {
         System.out.println("Testando análise CK no repositório: " + repo.fullName);
         
         try {
@@ -267,9 +287,14 @@ public class Lab2JavaAnalyzer {
                 Path testFile = dataPath.resolve("teste_1_repo.csv");
                 saveResultsCSV(Arrays.asList(analysis), testFile);
                 System.out.println("Arquivo de teste: " + testFile.toAbsolutePath());
+                return true;
+            } else {
+                System.out.println("FALHOU: Repositório não contém código Java analisável");
+                return false;
             }
         } catch (Exception e) {
             System.err.println("ERRO no teste: " + e.getMessage());
+            return false;
         }
     }
     
@@ -465,12 +490,12 @@ public class Lab2JavaAnalyzer {
             
             for (int i = 1; i < lines.size(); i++) {
                 String[] parts = lines.get(i).split(",");
-                if (parts.length >= 10) {
+                if (parts.length >= 35) { // Precisa de pelo menos 35 colunas para LOC
                     try {
-                        double cbo = Double.parseDouble(parts[7]); // CBO
-                        double dit = Double.parseDouble(parts[8]); // DIT
-                        double lcom = Double.parseDouble(parts[9]); // LCOM
-                        long loc = Long.parseLong(parts[3]); // LOC
+                        double cbo = Double.parseDouble(parts[3]);  // CBO (índice 3)
+                        double dit = Double.parseDouble(parts[8]);  // DIT (índice 8)
+                        double lcom = Double.parseDouble(parts[11]); // LCOM (índice 11)
+                        long loc = Long.parseLong(parts[34]); // LOC (índice 34)
                         
                         cboValues.add(cbo);
                         ditValues.add(dit);
