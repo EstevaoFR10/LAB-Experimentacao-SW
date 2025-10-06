@@ -1,0 +1,33 @@
+{
+  "total_prs": 53886,
+  "merged_prs": 42301,
+  "closed_prs": 11585,
+  "repositories_count": 186,
+  "metrics": {
+    "files_changed": {
+      "mean": 10.492762498608172,
+      "min": 0,
+      "max": 27162
+    },
+    "total_changes": {
+      "mean": 871.0008350963144,
+      "min": 0,
+      "max": 6251681
+    },
+    "analysis_time_hours": {
+      "mean": 1286.881761841872,
+      "min": 1.0002777777777778,
+      "max": 89086.04
+    },
+    "num_reviews": {
+      "mean": 3.1245963701146864,
+      "min": 1,
+      "max": 185
+    },
+    "num_comments": {
+      "mean": 3.234754852837472,
+      "min": 0,
+      "max": 589
+    }
+  }
+}
