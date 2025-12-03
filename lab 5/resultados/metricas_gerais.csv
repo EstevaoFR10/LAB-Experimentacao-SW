@@ -1,0 +1,2 @@
+﻿total_medicoes,medicoes_rest,medicoes_graphql,tempo_medio_rest,tempo_medio_graphql,ganho_tempo_geral,speedup_geral,tamanho_medio_rest,tamanho_medio_graphql,ganho_tamanho_geral,reducao_tamanho_geral,p_value_tempo_geral,p_value_tamanho_geral,data_inicio,data_fim,duracao_experimento_minutos
+300,150,150,1389.5051383972168,675.5654525756836,51.38085970988614,2.056803131509379,54209.76666666667,1237.4,97.7173854895766,43.809412208393944,4.496010598413022e-18,2.606422681021481e-35,2025-11-26 14:10:20.404837,2025-11-26 14:20:29.139344,10.145575116666667

@@ -1,0 +1,8 @@
+﻿,mean,mean,median,median,std,std,min,min,max,max
+tipo_api,GraphQL,REST,GraphQL,REST,GraphQL,REST,GraphQL,REST,GraphQL,REST
+consulta,,,,,,,,,,
+Consulta 1 - Simples,506.22,546.42,499.11,527.27,38.84,63.7,432.21,481.36,587.38,799.0
+Consulta 2 - Média,609.54,1326.37,589.69,1328.22,99.95,89.73,539.0,1177.51,1063.03,1538.25
+Consulta 3 - Complexa,1022.77,3115.2,1038.82,3089.24,93.06,322.59,859.4,2724.96,1194.26,4324.25
+Consulta 4 - Lista,657.48,820.13,644.75,772.14,72.5,226.17,536.19,666.31,881.93,1968.29
+Consulta 5 - Aninhada,581.81,1139.41,561.62,1127.85,80.87,59.88,515.0,1075.52,916.29,1364.6
